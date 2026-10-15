@@ -5,7 +5,7 @@
 
 const RIDER_LOCATION = {
   type: "Point",
-  coordinates: [78.4867, 17.385],
+  coordinates: [78.3488, 17.4454], // IIIT Hyderabad campus
 };
 const MAX_DISTANCE_METERS = 5000;
 const RESULT_LIMIT = 5;
