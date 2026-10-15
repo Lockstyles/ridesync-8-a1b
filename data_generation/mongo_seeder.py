@@ -9,6 +9,7 @@ Run before mongo/01_collections_and_indexes.js.
 import argparse
 import os
 import random
+import math
 from datetime import datetime, timedelta, timezone
 from tqdm import trange
 from faker import Faker
@@ -17,7 +18,7 @@ from pymongo import MongoClient
 fake = Faker()
 
 CITIES = {
-    "Hyderabad": (17.3850, 78.4867),
+    "Hyderabad": (17.4454, 78.3488),  # IIIT Hyderabad campus / Gachibowli
     "Bengaluru": (12.9716, 77.5946),
     "Mumbai": (19.0760, 72.8777),
     "Delhi": (28.6139, 77.2090),
@@ -35,10 +36,17 @@ FUEL_TYPES = ["PETROL", "DIESEL", "CNG", "ELECTRIC"]
 INSPECTION_RESULTS = ["PASS", "PASS", "PASS", "CONDITIONAL", "FAIL"]
 
 
-def jitter(lat, lon, km=12.0):
-    dlat = random.uniform(-km, km) / 111.0
-    dlon = random.uniform(-km, km) / 111.0
-    return lat + dlat, lon + dlon
+def random_point_within_radius(lat, lon, radius_km=5.0):
+    """Return a point uniformly distributed by area inside a radius."""
+    # sqrt(random()) gives a uniform distribution over the disk area rather
+    # than concentrating points near the origin.
+    radius = radius_km * math.sqrt(random.random())
+    angle = random.uniform(0.0, 2.0 * math.pi)
+    north_km = radius * math.cos(angle)
+    east_km = radius * math.sin(angle)
+    new_lat = lat + north_km / 111.0
+    new_lon = lon + east_km / (111.0 * math.cos(math.radians(lat)))
+    return new_lat, new_lon
 
 
 def seed_vehicle_metadata(db, vehicle_count, batch_size):
@@ -134,7 +142,7 @@ def seed_telemetry_pings(db, count, vehicle_count, batch_size, window_minutes):
     docs, total = [], 0
 
     for _ in trange(count, desc="TelemetryPings"):
-        lat, lon = jitter(*random.choice(city_points))
+        lat, lon = random_point_within_radius(*random.choice(city_points), radius_km=5.0)
 
         docs.append({
             "vehicle_id": random.randint(1, vehicle_count),

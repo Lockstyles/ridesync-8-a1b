@@ -12,20 +12,37 @@ Faker.seed(42)
 
 
 def clear_tables(cur):
+    # The audit ledger rejects UPDATE, DELETE and TRUNCATE in normal use.
+    # Seeding is an explicit owner-level reset, so suspend only that guard for
+    # the reset transaction and restore it before the transaction is committed.
+    cur.execute(
+        "ALTER TABLE wallet_audit_logs "
+        "DISABLE TRIGGER trg_wallet_audit_logs_immutable"
+    )
     cur.execute(
         "TRUNCATE trips, wallet_audit_logs, vehicles, riders "
         "RESTART IDENTITY CASCADE"
     )
+    cur.execute(
+        "ALTER TABLE wallet_audit_logs "
+        "ENABLE TRIGGER trg_wallet_audit_logs_immutable"
+    )
 
 
 def insert_riders(cur, count=10000):
-    riders = [
-        (
-            fake.name(),
-            fake.pydecimal(min_value=100, max_value=50000, right_digits=2),
+    riders = []
+    names = set()
+    for _ in trange(count, desc="Generating riders"):
+        name = fake.name()
+        while name in names:
+            name = fake.name()
+        names.add(name)
+        riders.append(
+            (
+                name,
+                fake.pydecimal(min_value=50000, max_value=150000, right_digits=2),
+            )
         )
-        for _ in trange(count, desc="Generating riders")
-    ]
     execute_values(
         cur,
         "INSERT INTO riders (name, wallet_balance) VALUES %s",
@@ -61,19 +78,6 @@ def get_balances(cur):
     return dict(cur.fetchall())
 
 
-def random_topups(cur, rider_ids, balances, topup_fraction=0.2):
- 
-    topup_riders = random.sample(rider_ids, k=int(len(rider_ids) * topup_fraction))
-    for rider_id in tqdm(topup_riders, desc="Random top-ups"):
-        topup_amount = fake.pydecimal(min_value=50, max_value=2000, right_digits=2)
-        cur.execute(
-            "UPDATE riders SET wallet_balance = wallet_balance + %s WHERE id = %s",
-            (topup_amount, rider_id),
-        )
-        balances[rider_id] += topup_amount
-    return len(topup_riders)
-
-
 BATCH_SIZE = 2000  # statements per round trip, not rows — tune down if Neon complains about tx size
 
 def book_trips(cur, rider_ids, vehicle_ids, balances, count=100000):
@@ -85,7 +89,6 @@ def book_trips(cur, rider_ids, vehicle_ids, balances, count=100000):
     )
 
     active_trip_id = {}
-    forced_topup_count = 0
     next_trip_id = 1  # trips.id is IDENTITY + table truncated first + sole writer
                        # -> id is just the row's insertion order, no SELECT needed
 
@@ -114,14 +117,14 @@ def book_trips(cur, rider_ids, vehicle_ids, balances, count=100000):
             ))
 
         if balances[rider_id] < fare_amount:
-            shortfall = fare_amount - balances[rider_id]
-            topup_amount = shortfall + fake.pydecimal(min_value=10, max_value=200, right_digits=2)
-            statements.append(cur.mogrify(
-                "UPDATE riders SET wallet_balance = wallet_balance + %s WHERE id = %s",
-                (topup_amount, rider_id),
-            ))
-            balances[rider_id] += topup_amount
-            forced_topup_count += 1
+            # The seeder's default rider balances are deliberately high enough
+            # that the 100,000 booking debits can be generated without
+            # synthetic top-up rows. This keeps wallet_audit_logs at exactly
+            # 100,000 prefilled rows: one immutable DEBIT per seeded booking.
+            raise RuntimeError(
+                f"Seed balance unexpectedly too low for rider {rider_id}; "
+                "increase the rider seed balance range before seeding."
+            )
 
         statements.append(cur.mogrify(
             "CALL sp_atomic_booking(%s, %s, %s)",
@@ -145,23 +148,12 @@ def book_trips(cur, rider_ids, vehicle_ids, balances, count=100000):
         ))
         if status != "COMPLETED":
             active_trip_id[rider_id] = trip_id
-        status = random.choices(
-            ["REQUESTED", "IN TRANSIT", "COMPLETED"],
-            weights=[0.34, 0.33, 0.33],
-        )[0]
-        if status != "REQUESTED":
-            statements.append(cur.mogrify(
-                "UPDATE trips SET status = %s WHERE id = %s",
-                (status, trip_id),
-            ))
-        if status != "COMPLETED":
-            active_trip_id[rider_id] = trip_id
 
         if len(statements) >= BATCH_SIZE:
             flush()
 
     flush()
-    return forced_topup_count, count
+    return 0, count
 
 
 def main():
@@ -180,12 +172,6 @@ def main():
             "used to when only COMPLETED trips counted."
         ),
     )
-    parser.add_argument(
-        "--topup-fraction",
-        type=float,
-        default=0.2,
-        help="Fraction of riders who get one random top-up, independent of trips.",
-    )
     args = parser.parse_args()
 
     conn = psycopg2.connect(args.dsn)
@@ -203,24 +189,20 @@ def main():
 
         balances = get_balances(cur)
 
-        topup_count = random_topups(cur, rider_ids, balances, args.topup_fraction)
-        conn.commit()
-
-        forced_topup_count, booked_count = book_trips(
+        _, booked_count = book_trips(
             cur, rider_ids, vehicle_ids, balances, args.trips
         )
         conn.commit()
     finally:
         conn.close()
 
-    ledger_rows = topup_count + forced_topup_count + booked_count
+    ledger_rows = booked_count
     print("Data inserted successfully.")
-    print(
-        f"Ledger rows written: {ledger_rows} "
-        f"(top-ups: {topup_count}, forced top-ups: {forced_topup_count}, "
-        f"booking debits: {booked_count})"
-    )
-    print("Not close enough to your target? Re-run with a higher/lower --trips.")
+    print(f"Ledger rows written: {ledger_rows} (one DEBIT per seeded booking)")
+    if ledger_rows == 100000:
+        print("wallet_audit_logs is prefilled with exactly 100,000 rows.")
+    else:
+        print("Adjust --trips if you need a different ledger size.")
 
 
 if __name__ == "__main__":
