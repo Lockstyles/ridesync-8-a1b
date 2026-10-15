@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#11251f">
+    <title>RideSync — Mobility operations</title>
+    <meta name="description" content="RideSync rider, trip, fleet and revenue operations dashboard.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <style>
+        /* Safety net: dialogs never render in page flow, even if styles.css is stale/cached */
+        .management-modal,
+        .modal-backdrop {
+            position: fixed;
+            opacity: 0;
+            pointer-events: none;
+        }
+    </style>
+    <link rel="stylesheet" href="/styles.css?v=10">
+</head>
+
+<body>
+    <div class="app-shell">
+        <aside class="sidebar" id="sidebar">
+            <a class="brand" href="#browse" aria-label="RideSync home">
+                <span class="brand-mark" aria-hidden="true"><i></i><i></i></span>
+                <span><b>RideSync</b><small>mobility OS</small></span>
+            </a>
+
+            <nav class="primary-nav" aria-label="Main navigation">
+                <button class="nav-link active" data-page="browse"><span>01</span>Browse</button>
+                <button class="nav-link" data-page="booking"><span>02</span>Book a trip</button>
+                <button class="nav-link" data-page="audit"><span>03</span>Audit trail</button>
+                <button class="nav-link" data-page="analytics"><span>04</span>Analytics</button>
+                <button class="nav-link" data-page="map"><span>05</span>Live map</button>
+                <button class="nav-link" data-page="reviews"><span>06</span>Reviews</button>
+            </nav>
+
+            <div class="system-card">
+                <div class="system-title"><span class="status-dot" id="systemDot"></span>System status</div>
+                <p id="systemStatus">Checking services…</p>
+                <button class="text-button" id="retryHealth">Check again</button>
+            </div>
+            <div class="sidebar-foot">Team 11 · Assignment 2</div>
+        </aside>
+
+        <div class="workspace">
+            <header class="topbar">
+                <button class="mobile-menu" id="mobileMenu" aria-label="Open navigation">Menu</button>
+                <div class="topbar-context">
+                    <span>Demo rider</span>
+                    <div class="actor-control">
+                        <span>#</span>
+                        <input id="actorInput" type="number" min="1" value="1" aria-label="Demo rider ID">
+                        <button id="setActor" aria-label="Load rider">Load</button>
+                    </div>
+                    <div class="actor-name" id="actorName">Loading rider…</div>
+                </div>
+                <time id="clock" aria-label="Current time"></time>
+            </header>
+
+            <main>
+                <section class="page active" id="page-browse" data-title="Browse">
+                    <div class="page-heading">
+                        <div><span class="eyebrow">Operations directory</span>
+                            <h1>Find the moving parts.</h1>
+                        </div>
+                        <p>Browse riders, vehicles and trips without pulling the whole database into your browser.</p>
+                    </div>
+
+                    <div class="entity-tabs" role="tablist" aria-label="Entity type">
+                        <button class="active" data-entity="riders">Riders</button>
+                        <button data-entity="vehicles">Vehicles</button>
+                        <button data-entity="trips">Trips</button>
+                    </div>
+                    <div class="panel table-panel">
+                        <div class="toolbar">
+                            <label class="search-field">
+                                <span>Search</span>
+                                <input id="browseSearch" type="search" placeholder="Name, plate or ID">
+                            </label>
+                            <label id="browseStatusWrap" class="compact-field hidden">
+                                <span>Status</span>
+                                <select id="browseStatus">
+                                    <option value="">All statuses</option>
+                                    <option>REQUESTED</option>
+                                    <option>IN TRANSIT</option>
+                                    <option>COMPLETED</option>
+                                </select>
+                            </label>
+                            <button class="button secondary" id="browseReload">Refresh</button>
+                            <button class="button primary" id="addRiderButton">+ Rider</button>
+                            <button class="button primary" id="addVehicleButton">+ Vehicle</button>
+                        </div>
+                        <div id="browseContent" class="data-region" aria-live="polite"></div>
+                        <div class="pagination" id="browsePagination"></div>
+                    </div>
+                </section>
+
+                <section class="page" id="page-booking" data-title="Book a trip">
+                    <div class="page-heading">
+                        <div><span class="eyebrow">Workflow 01 · atomic transaction</span>
+                            <h1>One tap. One transaction.</h1>
+                        </div>
+                        <p>The stored procedure locks the wallet, checks funds, charges the fare and creates the trip
+                            atomically.</p>
+                    </div>
+
+                    <div class="split-layout booking-layout">
+                        <div class="panel form-panel">
+                            <div class="panel-kicker">New booking</div>
+                            <h2>Where to next?</h2>
+                            <form id="bookingForm">
+                                <label><span>Rider ID</span><input id="bookingRider" name="rider_id" type="number"
+                                        min="1" required></label>
+                                <label><span>Available vehicle</span><select id="bookingVehicle" name="vehicle_id"
+                                        required>
+                                        <option value="">Loading vehicles…</option>
+                                    </select></label>
+                                <label><span>Fare amount</span>
+                                    <div class="money-input"><span>₹</span><input name="fare_amount" type="number"
+                                            min="0.01" step="0.01" placeholder="450.00" required></div>
+                                </label>
+                                <button class="button primary wide" type="submit"><span>Confirm
+                                        booking</span><b>→</b></button>
+                            </form>
+                            <div id="bookingMessage" aria-live="polite"></div>
+                        </div>
+
+                        <div class="stack">
+                            <article class="rider-wallet dark-card">
+                                <span class="panel-kicker">Selected wallet</span>
+                                <h3 id="walletRider">Rider #—</h3>
+                                <div class="wallet-balance"><small>Available balance</small><strong
+                                        id="walletBalance">₹—</strong></div>
+                                <div class="card-rule"></div>
+                                <p>Wallet debits are captured in the append-only audit ledger.</p>
+                            </article>
+                            <div class="panel">
+                                <div class="section-head">
+                                    <div><span class="panel-kicker">Status controls</span>
+                                        <h2>Active trip</h2>
+                                    </div><button class="text-button" id="refreshActiveTrip">Refresh</button>
+                                </div>
+                                <div id="activeTrip" class="data-region compact"></div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="page" id="page-audit" data-title="Audit trail">
+                    <div class="page-heading">
+                        <div><span class="eyebrow">Append-only ledger</span>
+                            <h1>Every rupee accounted for.</h1>
+                        </div>
+                        <p>Trace rider wallet movements, filter by date and verify the balance recorded after each
+                            change.</p>
+                    </div>
+                    <div class="panel table-panel">
+                        <div class="toolbar">
+                            <label class="compact-field"><span>From</span><input id="auditFrom" type="date"></label>
+                            <label class="compact-field"><span>To</span><input id="auditTo" type="date"></label>
+                            <button class="button primary" id="loadAudit">Apply filter</button>
+                            <div class="toolbar-stat"><span>Current actor</span><strong id="auditActor">Rider
+                                    #1</strong></div>
+                        </div>
+                        <div id="auditContent" class="data-region" aria-live="polite"></div>
+                    </div>
+                </section>
+
+                <section class="page" id="page-analytics" data-title="Analytics">
+                    <div class="page-heading">
+                        <div><span class="eyebrow">Workflow 02 · PostgreSQL</span>
+                            <h1>Revenue, with context.</h1>
+                        </div>
+                        <p>A seven-day moving average, dense ranking and materialized lifetime totals—all calculated in
+                            the database.</p>
+                    </div>
+                    <div class="toolbar floating-toolbar">
+                        <label class="compact-field"><span>Vehicle ID</span><input id="analyticsVehicle" type="number"
+                                min="1" placeholder="All"></label>
+                        <label class="compact-field"><span>Window</span><select id="analyticsDays">
+                                <option value="14">14 days</option>
+                                <option value="30" selected>30 days</option>
+                                <option value="90">90 days</option>
+                            </select></label>
+                        <button class="button primary" id="loadAnalytics">Update view</button>
+                    </div>
+                    <div class="metric-grid" id="analyticsMetrics"></div>
+                    <div class="analytics-grid">
+                        <div class="panel chart-panel">
+                            <div class="section-head">
+                                <div><span class="panel-kicker">Moving average</span>
+                                    <h2>Fare revenue trend</h2>
+                                </div><span class="legend"><i></i>7-day average</span>
+                            </div>
+                            <div id="revenueChart" class="chart-region"></div>
+                        </div>
+                        <div class="panel ranking-panel">
+                            <div class="section-head">
+                                <div><span class="panel-kicker">Dense rank</span>
+                                    <h2>Vehicle leaders</h2>
+                                </div>
+                            </div>
+                            <div id="rankingContent" class="data-region compact"></div>
+                        </div>
+                    </div>
+                    <div class="panel summary-panel">
+                        <div class="section-head">
+                            <div><span class="panel-kicker">Materialized view</span>
+                                <h2>Lifetime earnings</h2>
+                                <p id="refreshTime">Last refreshed —</p>
+                            </div>
+                            <button class="button secondary" id="refreshSummary">Refresh totals</button>
+                        </div>
+                        <div id="summaryContent" class="data-region"></div>
+                    </div>
+                </section>
+
+                <section class="page" id="page-map" data-title="Live map">
+                    <div class="page-heading">
+                        <div><span class="eyebrow">Workflow 03 · MongoDB geoNear</span>
+                            <h1>What’s close, right now?</h1>
+                        </div>
+                        <p>Available vehicles within five kilometres, deduplicated and ordered by spherical distance.
+                        </p>
+                    </div>
+                    <div class="map-controls panel">
+                        <label><span>Origin</span><select id="mapPreset">
+                                <option value="17.4454,78.3488">IIIT Hyderabad</option>
+                                <option value="12.9716,77.5946">Bengaluru</option>
+                                <option value="19.076,72.8777">Mumbai</option>
+                                <option value="28.6139,77.209">Delhi</option>
+                                <option value="13.0827,80.2707">Chennai</option>
+                            </select></label>
+                        <label><span>Latitude</span><input id="mapLat" type="number" step="0.0001"
+                                value="17.4454"></label>
+                        <label><span>Longitude</span><input id="mapLon" type="number" step="0.0001"
+                                value="78.3488"></label>
+                        <label><span>Radius</span><select id="mapRadius">
+                                <option value="2000">2 km</option>
+                                <option value="5000" selected>5 km</option>
+                                <option value="10000">10 km</option>
+                            </select></label>
+                        <button class="button primary" id="searchMap">Find vehicles</button>
+                        <label class="switch"><input id="mapPolling" type="checkbox" checked><span></span>Live ·
+                            15s</label>
+                    </div>
+                    <div class="map-layout">
+                        <div class="map-frame">
+                            <div id="vehicleMap" aria-label="Map of nearby vehicles"></div>
+                            <div class="map-stamp" id="mapStamp">Waiting for telemetry</div>
+                        </div>
+                        <div class="panel map-results">
+                            <div class="section-head">
+                                <div><span class="panel-kicker">Nearest first</span>
+                                    <h2>Available rides</h2>
+                                </div>
+                            </div>
+                            <div id="mapResults" class="data-region compact"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="page" id="page-reviews" data-title="Reviews">
+                    <div class="page-heading">
+                        <div><span class="eyebrow">Workflow 04 · MongoDB facet</span>
+                            <h1>Listen at fleet scale.</h1>
+                        </div>
+                        <p>One aggregation returns the rating distribution, most-used feedback tags and overall score.
+                        </p>
+                    </div>
+                    <div class="toolbar floating-toolbar">
+                        <label class="compact-field"><span>City</span><select id="reviewCity">
+                                <option>Hyderabad</option>
+                                <option>Bengaluru</option>
+                                <option>Mumbai</option>
+                                <option>Delhi</option>
+                                <option>Chennai</option>
+                            </select></label>
+                        <label class="compact-field"><span>Period</span><select id="reviewDays">
+                                <option value="30">30 days</option>
+                                <option value="90" selected>90 days</option>
+                                <option value="180">180 days</option>
+                            </select></label>
+                        <button class="button primary" id="loadReviews">Analyse</button>
+                    </div>
+                    <div class="reviews-grid">
+                        <article class="score-card dark-card"><span class="panel-kicker">Overall rating</span><strong
+                                id="reviewAverage">—</strong>
+                            <div class="stars">★★★★★</div>
+                            <p id="reviewCount">Loading reviews…</p>
+                        </article>
+                        <div class="panel">
+                            <div class="section-head">
+                                <div><span class="panel-kicker">Distribution</span>
+                                    <h2>Ratings</h2>
+                                </div>
+                            </div>
+                            <div id="ratingChart" class="bar-chart"></div>
+                        </div>
+                        <div class="panel">
+                            <div class="section-head">
+                                <div><span class="panel-kicker">Top signals</span>
+                                    <h2>Feedback tags</h2>
+                                </div>
+                            </div>
+                            <div id="tagChart" class="tag-chart"></div>
+                        </div>
+                    </div>
+                    <div class="panel catalog-panel">
+                        <div class="section-head">
+                            <div><span class="panel-kicker">Flexible document</span>
+                                <h2>Vehicle metadata</h2>
+                            </div>
+                            <div class="inline-control"><span>Vehicle #</span><input id="catalogVehicle" type="number"
+                                    min="1" value="1"><button class="text-button" id="loadCatalog">Load</button></div>
+                        </div>
+                        <div id="catalogContent" class="data-region"></div>
+                    </div>
+                </section>
+            </main>
+        </div>
+    </div>
+
+
+    <div class="modal-backdrop" id="managementModalBackdrop" aria-hidden="true"></div>
+    <section class="management-modal" id="managementModal" role="dialog" aria-modal="true"
+        aria-labelledby="managementModalTitle" aria-hidden="true">
+        <div class="modal-head">
+            <div><span class="panel-kicker" id="managementModalKicker">Fleet management</span>
+                <h2 id="managementModalTitle">Add rider</h2>
+                <p id="managementModalDescription">Create a new rider and starting wallet balance.</p>
+            </div>
+            <button class="drawer-close modal-close" id="managementModalClose" type="button"
+                aria-label="Close">×</button>
+        </div>
+        <form id="addRiderForm" class="management-form">
+            <label><span>Name</span><input name="name" minlength="2" maxlength="100" required placeholder="Demo Rider"
+                    autocomplete="off"></label>
+            <label><span>Starting wallet</span><input name="wallet_balance" type="number" min="0" step="0.01"
+                    value="25000" required></label>
+            <button class="button primary wide" type="submit">Add rider <b>→</b></button>
+        </form>
+        <form id="addVehicleForm" class="management-form hidden">
+            <label><span>License plate</span><input name="license_plate" maxlength="20" required
+                    placeholder="TS09AB1234" autocomplete="off"></label>
+            <label><span>Class</span><select name="vehicle_class">
+                    <option>HATCHBACK</option>
+                    <option>SEDAN</option>
+                    <option>SUV</option>
+                    <option>AUTO</option>
+                    <option>BIKE</option>
+                </select></label>
+            <button class="button primary wide" type="submit">Add vehicle <b>→</b></button>
+        </form>
+        <div id="managementMessage" class="modal-message" aria-live="polite"></div>
+    </section>
+
+    <div class="drawer-backdrop" id="drawerBackdrop"></div>
+    <aside class="detail-drawer" id="detailDrawer" aria-label="Record details" aria-hidden="true">
+        <button class="drawer-close" id="drawerClose" aria-label="Close details">×</button>
+        <div id="drawerContent"></div>
+    </aside>
+    <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="/app.js?v=10" defer></script>
+</body>
+
+</html>
