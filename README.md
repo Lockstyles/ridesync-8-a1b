@@ -142,7 +142,7 @@ Deletion is intentionally constrained by the inherited relational history: a rid
 
 Repository: `https://github.com/Lockstyles/ridesync-8-a1b`
 
-Demo video: `<link>`
+Demo video: `https://drive.google.com/drive/folders/1yIDfPpcrLLoxUqKtq62l9rvxD9Lh0HS1?usp=drive_link`
 
 Final GitHub commit hash: `<hash>`
 
